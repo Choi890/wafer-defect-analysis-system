@@ -238,6 +238,15 @@ def get_latest_results_frame() -> pd.DataFrame:
     return pd.DataFrame(list_results(limit=1000))
 
 
+def get_table_count(table_name: str) -> int:
+    allowed_tables = {"wafer_info", "prediction_result", "model_metric", "defect_statistics"}
+    if table_name not in allowed_tables:
+        raise ValueError(f"Unsupported table name: {table_name}")
+    init_db()
+    with get_connection() as conn:
+        return int(conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0])
+
+
 def get_wafer_ids() -> list[str]:
     rows = _rows("SELECT wafer_id FROM wafer_info ORDER BY wafer_id")
     return [row["wafer_id"] for row in rows]

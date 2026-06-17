@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import html
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -11,19 +11,166 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import CONFUSION_MATRIX_PATH, DEFECT_CLASSES, EXCEL_REPORT_PATH, PDF_REPORT_PATH
-from src.database import repository
-from src.utils.report_generator import generate_reports
-from src.utils.visualization import (
+from src.config import (  # noqa: E402
+    APP_VERSION,
+    CRITICAL_DEFECT_RATE,
+    CONFUSION_MATRIX_PATH,
+    DEFECT_CLASSES,
+    EXCEL_REPORT_PATH,
+    LOW_CONFIDENCE_THRESHOLD,
+    MODEL_PATH,
+    PDF_REPORT_PATH,
+    WARNING_DEFECT_RATE,
+)
+from src.database import repository  # noqa: E402
+from src.utils.quality import (  # noqa: E402
+    QualityThresholds,
+    build_lot_quality_table,
+    build_quality_summary,
+    filter_quality_frames,
+)
+from src.utils.report_generator import generate_reports  # noqa: E402
+from src.utils.visualization import (  # noqa: E402
+    confidence_distribution_chart,
     confusion_matrix_figure,
     defect_bar_chart,
+    defect_pareto_chart,
     defect_pie_chart,
     lot_defect_rate_chart,
-    wafer_map_figure,
+    lot_risk_chart,
+    wafer_heatmap_figure,
 )
 
 
-st.set_page_config(page_title="Wafer Defect Analysis", layout="wide")
+st.set_page_config(
+    page_title="Wafer Quality Ops",
+    page_icon=None,
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+
+def inject_css() -> None:
+    st.markdown(
+        """
+        <style>
+            :root {
+                --text: #111827;
+                --muted: #64748b;
+                --line: #e5e7eb;
+                --surface: #ffffff;
+                --soft: #f8fafc;
+                --blue: #2563eb;
+                --green: #16a34a;
+                --amber: #f59e0b;
+                --red: #dc2626;
+            }
+            .block-container {
+                padding-top: 1.4rem;
+                padding-bottom: 2.4rem;
+                max-width: 1440px;
+            }
+            h1, h2, h3 {
+                letter-spacing: 0;
+            }
+            [data-testid="stMetric"] {
+                background: var(--surface);
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                padding: 14px 16px;
+                box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+            }
+            [data-testid="stMetricLabel"] {
+                color: var(--muted);
+            }
+            [data-testid="stMetricValue"] {
+                color: var(--text);
+                font-size: 1.55rem;
+            }
+            .ops-header {
+                border-bottom: 1px solid var(--line);
+                padding-bottom: 18px;
+                margin-bottom: 18px;
+            }
+            .ops-title {
+                display: flex;
+                align-items: flex-end;
+                justify-content: space-between;
+                gap: 24px;
+                flex-wrap: wrap;
+            }
+            .ops-title h1 {
+                margin: 0;
+                font-size: 2rem;
+                line-height: 1.15;
+            }
+            .ops-subtitle {
+                margin-top: 8px;
+                color: var(--muted);
+                font-size: 0.94rem;
+            }
+            .status-strip {
+                display: flex;
+                gap: 8px;
+                flex-wrap: wrap;
+                justify-content: flex-end;
+            }
+            .status-pill {
+                border: 1px solid var(--line);
+                border-radius: 999px;
+                padding: 6px 10px;
+                font-size: 0.82rem;
+                color: var(--text);
+                background: var(--soft);
+                white-space: nowrap;
+            }
+            .status-ok {
+                color: #166534;
+                background: #f0fdf4;
+                border-color: #bbf7d0;
+            }
+            .status-warn {
+                color: #92400e;
+                background: #fffbeb;
+                border-color: #fde68a;
+            }
+            .section-label {
+                color: var(--muted);
+                font-size: 0.78rem;
+                font-weight: 700;
+                letter-spacing: .06em;
+                text-transform: uppercase;
+                margin-bottom: 8px;
+            }
+            .action-row {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                flex-wrap: wrap;
+            }
+            .small-muted {
+                color: var(--muted);
+                font-size: 0.86rem;
+            }
+            .risk-critical {
+                color: #991b1b;
+                font-weight: 700;
+            }
+            .risk-warning {
+                color: #92400e;
+                font-weight: 700;
+            }
+            .risk-normal {
+                color: #166534;
+                font-weight: 700;
+            }
+            div[data-testid="stTabs"] button {
+                font-size: 0.94rem;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 @st.cache_data(ttl=60)
@@ -31,149 +178,300 @@ def load_dashboard_data():
     repository.bootstrap_database()
     wafer_df = repository.get_wafer_info_frame()
     result_df = repository.get_latest_results_frame()
-    lot_stats = pd.DataFrame(repository.get_lot_statistics())
     defect_stats = pd.DataFrame(repository.get_defect_statistics())
     metrics = repository.get_latest_metrics()
-    return wafer_df, result_df, lot_stats, defect_stats, metrics
+    return wafer_df, result_df, defect_stats, metrics
 
 
-def render_overview(wafer_df: pd.DataFrame, metrics: dict | None) -> None:
-    total = len(wafer_df)
-    normal = int((wafer_df["failure_type"] == "Normal").sum())
-    defective = total - normal
-    defect_rate = defective / total if total else 0.0
-    top_defect = (
-        wafer_df.loc[wafer_df["failure_type"] != "Normal", "failure_type"].value_counts().idxmax()
-        if defective
-        else "None"
+def percent(value: float) -> str:
+    return f"{value * 100:.1f}%"
+
+
+def render_header(summary: dict[str, object], metrics: dict | None) -> None:
+    model_ready = MODEL_PATH.exists()
+    model_label = metrics.get("model_name", "RuleBaseline") if metrics else "RuleBaseline"
+    model_status = "CNN ready" if model_ready else "Rule baseline"
+    risk_status = "정상" if int(summary["critical_lots"]) == 0 else "주의 필요"
+    risk_class = "status-ok" if risk_status == "정상" else "status-warn"
+
+    st.markdown(
+        f"""
+        <div class="ops-header">
+          <div class="ops-title">
+            <div>
+              <h1>Wafer Quality Operations</h1>
+              <div class="ops-subtitle">Lot 단위 품질 상태, 불량 패턴, 모델 예측 신뢰도를 통합 모니터링합니다.</div>
+            </div>
+            <div class="status-strip">
+              <span class="status-pill status-ok">API v{html.escape(APP_VERSION)}</span>
+              <span class="status-pill status-ok">DB online</span>
+              <span class="status-pill {risk_class}">Risk {risk_status}</span>
+              <span class="status-pill">{html.escape(model_label)} · {html.escape(model_status)}</span>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Total Wafers", f"{total:,}")
-    c2.metric("Normal", f"{normal:,}")
-    c3.metric("Defective", f"{defective:,}")
-    c4.metric("Defect Rate", f"{defect_rate:.1%}")
-    c5.metric("Top Defect", top_defect)
 
-    left, right = st.columns([1.3, 1])
+def render_kpis(summary: dict[str, object]) -> None:
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Wafers", f"{summary['total_wafers']:,}")
+    c2.metric("Lots", f"{summary['total_lots']:,}")
+    c3.metric("Defect Rate", percent(float(summary["defect_rate"])))
+    c4.metric("Risk Lots", f"{summary['risk_lots']:,}")
+    c5.metric("Avg Confidence", percent(float(summary["avg_confidence"])))
+    c6.metric("Model F1", f"{float(summary['model_f1']):.3f}")
+
+
+def render_sidebar(wafer_df: pd.DataFrame) -> tuple[list[str], list[str], QualityThresholds]:
+    st.sidebar.header("운영 필터")
+    lots = sorted(wafer_df["lot_id"].dropna().unique().tolist())
+    defects = sorted(wafer_df["failure_type"].dropna().unique().tolist())
+    selected_lots = st.sidebar.multiselect("Lot", lots, default=[])
+    selected_defects = st.sidebar.multiselect("불량 유형", defects, default=[])
+
+    st.sidebar.divider()
+    st.sidebar.header("관리 기준")
+    warning = st.sidebar.slider("Warning 불량률", 0.0, 1.0, WARNING_DEFECT_RATE, 0.05)
+    critical = st.sidebar.slider("Critical 불량률", warning, 1.0, CRITICAL_DEFECT_RATE, 0.05)
+    low_confidence = st.sidebar.slider("낮은 신뢰도 기준", 0.0, 1.0, LOW_CONFIDENCE_THRESHOLD, 0.05)
+
+    st.sidebar.divider()
+    if st.sidebar.button("데이터 새로고침", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+    return selected_lots, selected_defects, QualityThresholds(
+        warning_defect_rate=warning,
+        critical_defect_rate=critical,
+        low_confidence=low_confidence,
+    )
+
+
+def render_control_tower(
+    wafer_df: pd.DataFrame,
+    result_df: pd.DataFrame,
+    lot_quality_df: pd.DataFrame,
+    thresholds: QualityThresholds,
+) -> None:
+    left, right = st.columns([1.15, 1])
     with left:
-        st.plotly_chart(defect_bar_chart(wafer_df), use_container_width=True)
+        st.plotly_chart(lot_risk_chart(lot_quality_df), use_container_width=True)
     with right:
-        if metrics:
-            st.subheader("Latest Model Metric")
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Accuracy", f"{metrics['accuracy']:.3f}")
-            m2.metric("Precision", f"{metrics['precision_score']:.3f}")
-            m3.metric("Recall", f"{metrics['recall_score']:.3f}")
-            m4.metric("F1", f"{metrics['f1_score']:.3f}")
+        st.plotly_chart(defect_pareto_chart(wafer_df), use_container_width=True)
+
+    c1, c2 = st.columns([1.1, 1])
+    with c1:
+        st.markdown('<div class="section-label">Risk Queue</div>', unsafe_allow_html=True)
+        risk_queue = lot_quality_df[lot_quality_df["risk_level"].isin(["Warning", "Critical"])].copy()
+        risk_queue["defect_rate"] = risk_queue["defect_rate"].map(lambda value: round(float(value), 4))
+        risk_queue["avg_confidence"] = risk_queue["avg_confidence"].map(lambda value: round(float(value), 4))
+        st.dataframe(
+            risk_queue,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "lot_id": "Lot",
+                "total_wafers": "Wafers",
+                "defect_wafers": "Defects",
+                "defect_rate": st.column_config.ProgressColumn("Defect Rate", min_value=0, max_value=1),
+                "avg_confidence": st.column_config.ProgressColumn("Avg Confidence", min_value=0, max_value=1),
+                "dominant_defect": "Dominant",
+                "risk_level": "Risk",
+            },
+        )
+    with c2:
+        st.markdown('<div class="section-label">Low Confidence Predictions</div>', unsafe_allow_html=True)
+        if result_df.empty:
+            st.info("예측 결과가 없습니다.")
         else:
-            st.info("Run `python -m src.pipeline` to train the CNN and store model metrics.")
+            low_confidence = result_df[result_df["confidence"].lt(thresholds.low_confidence)].sort_values("confidence")
+            st.dataframe(
+                low_confidence[["wafer_id", "lot_id", "actual_label", "predicted_label", "confidence", "created_at"]].head(12),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "wafer_id": "Wafer",
+                    "lot_id": "Lot",
+                    "actual_label": "Actual",
+                    "predicted_label": "Predicted",
+                    "confidence": st.column_config.ProgressColumn("Confidence", min_value=0, max_value=1),
+                    "created_at": "Created",
+                },
+            )
 
 
-def render_distribution(wafer_df: pd.DataFrame, lot_stats: pd.DataFrame) -> None:
+def render_lot_analytics(wafer_df: pd.DataFrame, lot_quality_df: pd.DataFrame) -> None:
     left, right = st.columns(2)
     with left:
-        st.plotly_chart(defect_bar_chart(wafer_df), use_container_width=True)
+        st.plotly_chart(lot_defect_rate_chart(wafer_df), use_container_width=True)
     with right:
+        st.plotly_chart(defect_bar_chart(wafer_df), use_container_width=True)
+
+    left, right = st.columns([1, 1])
+    with left:
         st.plotly_chart(defect_pie_chart(wafer_df), use_container_width=True)
-    st.plotly_chart(lot_defect_rate_chart(wafer_df), use_container_width=True)
-    st.dataframe(lot_stats, use_container_width=True, hide_index=True)
+    with right:
+        table = lot_quality_df.copy()
+        table["defect_rate"] = table["defect_rate"].map(lambda value: round(float(value), 4))
+        table["avg_confidence"] = table["avg_confidence"].map(lambda value: round(float(value), 4))
+        st.dataframe(
+            table,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "lot_id": "Lot",
+                "total_wafers": "Wafers",
+                "defect_wafers": "Defects",
+                "defect_rate": st.column_config.ProgressColumn("Defect Rate", min_value=0, max_value=1),
+                "avg_confidence": st.column_config.ProgressColumn("Avg Confidence", min_value=0, max_value=1),
+                "dominant_defect": "Dominant",
+                "risk_level": "Risk",
+            },
+        )
 
 
-def render_wafer_viewer(result_df: pd.DataFrame) -> None:
-    wafer_ids = repository.get_wafer_ids()
-    selected = st.selectbox("Wafer ID", wafer_ids, index=0 if wafer_ids else None)
-    if not selected:
+def render_wafer_review(wafer_df: pd.DataFrame, result_df: pd.DataFrame) -> None:
+    wafer_ids = wafer_df["wafer_id"].tolist()
+    if not wafer_ids:
+        st.info("선택된 필터에 해당하는 wafer가 없습니다.")
         return
 
+    selected = st.selectbox("Wafer ID", wafer_ids, index=0)
     wafer_map = repository.load_wafer_map(selected)
-    result = repository.get_result_by_wafer_id(selected)
-    actual = result.get("actual_label") if result else "Unknown"
-    predicted = result.get("predicted_label") if result else "Not predicted"
-    confidence = float(result.get("confidence", 0.0)) if result else 0.0
+    result = repository.get_result_by_wafer_id(selected) or {}
+    wafer_info = wafer_df[wafer_df["wafer_id"] == selected].iloc[0].to_dict()
+
+    left, right = st.columns([1, 1.15])
+    with left:
+        if wafer_map is not None:
+            st.plotly_chart(wafer_heatmap_figure(wafer_map, title=selected), use_container_width=True)
+    with right:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Actual", str(result.get("actual_label", wafer_info.get("failure_type", "Unknown"))))
+        c2.metric("Predicted", str(result.get("predicted_label", "Not predicted")))
+        c3.metric("Confidence", percent(float(result.get("confidence", 0.0))))
+
+        detail = pd.DataFrame(
+            [
+                {
+                    "wafer_id": selected,
+                    "lot_id": wafer_info.get("lot_id"),
+                    "inspection_date": wafer_info.get("inspection_date"),
+                    "die_size": wafer_info.get("die_size"),
+                    "model_name": result.get("model_name"),
+                    "created_at": result.get("created_at"),
+                }
+            ]
+        )
+        st.dataframe(detail, use_container_width=True, hide_index=True)
+
+        if not result_df.empty:
+            st.markdown('<div class="section-label">Recent Predictions</div>', unsafe_allow_html=True)
+            recent = result_df[result_df["lot_id"] == wafer_info.get("lot_id")].head(10)
+            st.dataframe(
+                recent[["wafer_id", "actual_label", "predicted_label", "confidence", "created_at"]],
+                use_container_width=True,
+                hide_index=True,
+                column_config={"confidence": st.column_config.ProgressColumn("Confidence", min_value=0, max_value=1)},
+            )
+
+
+def render_model_ops(result_df: pd.DataFrame, metrics: dict | None) -> None:
+    if metrics:
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Model", metrics["model_name"])
+        c2.metric("Accuracy", f"{metrics['accuracy']:.3f}")
+        c3.metric("Precision", f"{metrics['precision_score']:.3f}")
+        c4.metric("Recall", f"{metrics['recall_score']:.3f}")
+        c5.metric("F1-score", f"{metrics['f1_score']:.3f}")
+    else:
+        st.info("학습된 모델 지표가 없습니다. `python -m src.pipeline --epochs 6` 실행 후 지표가 표시됩니다.")
 
     left, right = st.columns([1, 1.2])
     with left:
-        if wafer_map is not None:
-            st.pyplot(wafer_map_figure(wafer_map, title=selected), clear_figure=True)
+        st.plotly_chart(confidence_distribution_chart(result_df), use_container_width=True)
     with right:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Actual Label", actual)
-        c2.metric("Predicted Label", predicted)
-        c3.metric("Confidence", f"{confidence:.3f}")
+        if CONFUSION_MATRIX_PATH.exists():
+            matrix_df = pd.read_csv(CONFUSION_MATRIX_PATH, index_col=0)
+            labels = matrix_df.index.tolist() or DEFECT_CLASSES
+            st.plotly_chart(confusion_matrix_figure(matrix_df.to_numpy(), labels), use_container_width=True)
+
+    st.markdown('<div class="section-label">Prediction Audit Log</div>', unsafe_allow_html=True)
+    if result_df.empty:
+        st.info("예측 로그가 없습니다.")
+    else:
+        audit = result_df[["created_at", "wafer_id", "lot_id", "actual_label", "predicted_label", "confidence", "model_name"]]
         st.dataframe(
-            result_df[result_df["wafer_id"] == selected],
+            audit,
             use_container_width=True,
             hide_index=True,
+            column_config={"confidence": st.column_config.ProgressColumn("Confidence", min_value=0, max_value=1)},
         )
 
 
-def render_model_performance(metrics: dict | None) -> None:
-    if metrics:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Accuracy", f"{metrics['accuracy']:.3f}")
-        c2.metric("Precision", f"{metrics['precision_score']:.3f}")
-        c3.metric("Recall", f"{metrics['recall_score']:.3f}")
-        c4.metric("F1-score", f"{metrics['f1_score']:.3f}")
-    else:
-        st.info("No trained model metric stored yet.")
-
-    if CONFUSION_MATRIX_PATH.exists():
-        matrix_df = pd.read_csv(CONFUSION_MATRIX_PATH, index_col=0)
-        matrix = matrix_df.to_numpy()
-        labels = matrix_df.index.tolist() or DEFECT_CLASSES
-        st.plotly_chart(confusion_matrix_figure(matrix, labels), use_container_width=True)
-
-
-def render_report(defect_stats: pd.DataFrame, metrics: dict | None) -> None:
-    if st.button("Generate Reports", type="primary"):
-        generate_reports()
-        st.cache_data.clear()
-
-    left, right = st.columns(2)
+def render_reports(defect_stats: pd.DataFrame, summary: dict[str, object], metrics: dict | None) -> None:
+    left, right = st.columns([1, 1])
     with left:
-        st.subheader("Lot / Defect Statistics")
-        st.dataframe(defect_stats, use_container_width=True, hide_index=True)
-    with right:
-        st.subheader("Model Summary")
-        st.json(metrics or {"status": "No trained model metric stored yet."})
+        if st.button("리포트 재생성", type="primary", use_container_width=True):
+            generate_reports()
+            st.cache_data.clear()
+            st.success("리포트를 재생성했습니다.")
 
-    if EXCEL_REPORT_PATH.exists():
-        st.download_button(
-            "Download Excel Report",
-            data=EXCEL_REPORT_PATH.read_bytes(),
-            file_name=EXCEL_REPORT_PATH.name,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        if EXCEL_REPORT_PATH.exists():
+            st.download_button(
+                "Excel 리포트 다운로드",
+                data=EXCEL_REPORT_PATH.read_bytes(),
+                file_name=EXCEL_REPORT_PATH.name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        if PDF_REPORT_PATH.exists():
+            st.download_button(
+                "PDF 리포트 다운로드",
+                data=PDF_REPORT_PATH.read_bytes(),
+                file_name=PDF_REPORT_PATH.name,
+                mime="application/pdf",
+                use_container_width=True,
+            )
+
+    with right:
+        st.markdown('<div class="section-label">Executive Snapshot</div>', unsafe_allow_html=True)
+        st.json(
+            {
+                "summary": summary,
+                "model": metrics or {"status": "No trained model metric"},
+            }
         )
-    if PDF_REPORT_PATH.exists():
-        st.download_button(
-            "Download PDF Report",
-            data=PDF_REPORT_PATH.read_bytes(),
-            file_name=PDF_REPORT_PATH.name,
-            mime="application/pdf",
-        )
+
+    st.markdown('<div class="section-label">Defect Statistics</div>', unsafe_allow_html=True)
+    st.dataframe(defect_stats, use_container_width=True, hide_index=True)
 
 
 def main() -> None:
-    st.title("Wafer Defect Analysis System")
-    page = st.sidebar.radio(
-        "Page",
-        ["Overview", "Defect Distribution", "Wafer Map Viewer", "Model Performance", "Report"],
-    )
-    if st.sidebar.button("Refresh Data"):
-        st.cache_data.clear()
+    inject_css()
+    wafer_df, result_df, defect_stats, metrics = load_dashboard_data()
+    selected_lots, selected_defects, thresholds = render_sidebar(wafer_df)
+    filtered_wafer, filtered_result = filter_quality_frames(wafer_df, result_df, selected_lots, selected_defects)
+    summary = build_quality_summary(filtered_wafer, filtered_result, metrics, thresholds)
+    lot_quality_df = build_lot_quality_table(filtered_wafer, filtered_result, thresholds)
 
-    wafer_df, result_df, lot_stats, defect_stats, metrics = load_dashboard_data()
-    if page == "Overview":
-        render_overview(wafer_df, metrics)
-    elif page == "Defect Distribution":
-        render_distribution(wafer_df, lot_stats)
-    elif page == "Wafer Map Viewer":
-        render_wafer_viewer(result_df)
-    elif page == "Model Performance":
-        render_model_performance(metrics)
-    else:
-        render_report(defect_stats, metrics)
+    render_header(summary, metrics)
+    render_kpis(summary)
+
+    tabs = st.tabs(["Control Tower", "Lot Analytics", "Wafer Review", "Model Ops", "Reports"])
+    with tabs[0]:
+        render_control_tower(filtered_wafer, filtered_result, lot_quality_df, thresholds)
+    with tabs[1]:
+        render_lot_analytics(filtered_wafer, lot_quality_df)
+    with tabs[2]:
+        render_wafer_review(filtered_wafer, filtered_result)
+    with tabs[3]:
+        render_model_ops(filtered_result, metrics)
+    with tabs[4]:
+        render_reports(defect_stats, summary, metrics)
 
 
 if __name__ == "__main__":

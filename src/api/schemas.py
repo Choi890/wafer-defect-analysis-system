@@ -19,3 +19,21 @@ class PredictResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     database_ready: bool
+    model_ready: bool
+    wafer_count: int
+    prediction_count: int
+    version: str
+    environment: str
+
+
+class QualitySummaryResponse(BaseModel):
+    total_wafers: int
+    total_lots: int
+    defect_wafers: int
+    defect_rate: float
+    top_defect: str
+    risk_lots: int
+    critical_lots: int
+    avg_confidence: float
+    low_confidence_count: int
+    model_f1: float

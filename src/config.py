@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
@@ -18,16 +19,22 @@ TRAIN_CSV_PATH = PROCESSED_DATA_DIR / "train.csv"
 TEST_CSV_PATH = PROCESSED_DATA_DIR / "test.csv"
 LABEL_MAP_PATH = PROCESSED_DATA_DIR / "label_map.json"
 SAMPLE_WAFER_PATH = SAMPLE_DATA_DIR / "sample_wafer.npy"
-MODEL_PATH = MODEL_DIR / "wafer_cnn_model.pt"
-DATABASE_PATH = DATA_DIR / "wafer_quality.db"
+MODEL_PATH = Path(os.getenv("WAFER_MODEL_PATH", str(MODEL_DIR / "wafer_cnn_model.pt")))
+DATABASE_PATH = Path(os.getenv("WAFER_DATABASE_PATH", str(DATA_DIR / "wafer_quality.db")))
 METRICS_JSON_PATH = REPORT_DIR / "model_metrics.json"
 CONFUSION_MATRIX_PATH = REPORT_DIR / "confusion_matrix.csv"
 EXCEL_REPORT_PATH = REPORT_DIR / "defect_analysis_report.xlsx"
 PDF_REPORT_PATH = REPORT_DIR / "model_performance_report.pdf"
 
+APP_NAME = "Wafer Defect Analysis System"
+APP_VERSION = "0.2.0"
+APP_ENV = os.getenv("APP_ENV", "local")
 IMAGE_SIZE = 32
 RANDOM_SEED = 42
 MODEL_NAME = "CNN_v1"
+WARNING_DEFECT_RATE = float(os.getenv("WARNING_DEFECT_RATE", "0.70"))
+CRITICAL_DEFECT_RATE = float(os.getenv("CRITICAL_DEFECT_RATE", "0.85"))
+LOW_CONFIDENCE_THRESHOLD = float(os.getenv("LOW_CONFIDENCE_THRESHOLD", "0.70"))
 
 DEFECT_CLASSES = [
     "Normal",

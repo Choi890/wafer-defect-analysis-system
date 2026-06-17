@@ -6,11 +6,12 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
-from src.api.schemas import HealthResponse, PredictRequest, PredictResponse
-from src.config import DATABASE_PATH
+from src.api.schemas import HealthResponse, PredictRequest, PredictResponse, QualitySummaryResponse
+from src.config import APP_ENV, APP_VERSION, DATABASE_PATH, MODEL_PATH
 from src.data.load_data import load_or_create_raw_dataset
 from src.database import repository
 from src.models.predict import Predictor
+from src.utils.quality import build_quality_summary
 
 
 router = APIRouter()
@@ -18,7 +19,16 @@ router = APIRouter()
 
 @router.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    return HealthResponse(status="ok", database_ready=DATABASE_PATH.exists())
+    repository.bootstrap_database()
+    return HealthResponse(
+        status="ok",
+        database_ready=DATABASE_PATH.exists(),
+        model_ready=MODEL_PATH.exists(),
+        wafer_count=repository.get_table_count("wafer_info"),
+        prediction_count=repository.get_table_count("prediction_result"),
+        version=APP_VERSION,
+        environment=APP_ENV,
+    )
 
 
 def _lookup_wafer(wafer_id: str) -> tuple[np.ndarray, dict[str, object]]:
@@ -84,6 +94,15 @@ def metrics():
         "latest": repository.get_latest_metrics(),
         "history": repository.get_metrics_history(),
     }
+
+
+@router.get("/summary", response_model=QualitySummaryResponse)
+def quality_summary() -> QualitySummaryResponse:
+    repository.bootstrap_database()
+    wafer_df = repository.get_wafer_info_frame()
+    result_df = repository.get_latest_results_frame()
+    summary = build_quality_summary(wafer_df, result_df, repository.get_latest_metrics())
+    return QualitySummaryResponse(**summary)
 
 
 @router.get("/statistics/lot")
