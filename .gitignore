@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local runtime artifacts
+*.db
+data/raw/*.pkl
+data/processed/*
+!data/processed/.gitkeep
+reports/*.pdf
+reports/*.xlsx
+reports/*.json
+reports/*.csv
+saved_models/*.pt
+logs/
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
