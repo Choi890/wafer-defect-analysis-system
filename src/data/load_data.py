@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import json
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -8,9 +10,12 @@ import pandas as pd
 
 from src.config import (
     DEFECT_CLASSES,
+    ENABLE_SYNTHETIC_DATA,
     IMAGE_SIZE,
     RANDOM_SEED,
     RAW_DATA_PATH,
+    RAW_DATA_PATH_FROM_ENV,
+    ROOT_DIR,
     SAMPLE_WAFER_PATH,
     ensure_directories,
 )
@@ -117,14 +122,144 @@ def generate_synthetic_dataset(
     return df.sample(frac=1.0, random_state=seed).reset_index(drop=True)
 
 
+def _parse_numeric_rows(text: str) -> np.ndarray | None:
+    rows: list[list[int]] = []
+    for raw_row in text.replace("|", ";").split(";"):
+        tokens = raw_row.replace(",", " ").split()
+        if tokens:
+            rows.append([int(float(token)) for token in tokens])
+    if not rows:
+        return None
+    return np.asarray(rows, dtype=np.uint8)
+
+
+def _parse_wafer_map(value: object, base_dir: Path) -> np.ndarray:
+    if isinstance(value, np.ndarray):
+        wafer_map = value
+    elif isinstance(value, (list, tuple)):
+        wafer_map = np.asarray(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        candidate = Path(text)
+        if not candidate.is_absolute():
+            candidate = base_dir / candidate
+        if candidate.exists() and candidate.suffix.lower() == ".npy":
+            wafer_map = np.load(candidate)
+        else:
+            parsed: object | None = None
+            for parser in (json.loads, ast.literal_eval):
+                try:
+                    parsed = parser(text)
+                    break
+                except (json.JSONDecodeError, ValueError, SyntaxError):
+                    continue
+            if parsed is None:
+                parsed_rows = _parse_numeric_rows(text)
+                if parsed_rows is None:
+                    raise ValueError("wafer_map must be a 2D array, JSON string, delimited rows, or .npy path")
+                wafer_map = parsed_rows
+            else:
+                wafer_map = np.asarray(parsed)
+    else:
+        raise ValueError("wafer_map must be a 2D array, JSON string, delimited rows, or .npy path")
+
+    wafer_map = np.asarray(wafer_map, dtype=np.uint8)
+    if wafer_map.ndim != 2:
+        raise ValueError(f"wafer_map must be 2D, got shape={wafer_map.shape}")
+    return wafer_map
+
+
+def _is_missing_scalar(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (np.ndarray, list, tuple)):
+        return False
+    return bool(pd.isna(value))
+
+
+def _string_or_default(value: object, default: str) -> str:
+    if _is_missing_scalar(value):
+        return default
+    return str(value)
+
+
+def normalize_raw_dataset(df: pd.DataFrame, base_dir: Path) -> pd.DataFrame:
+    required_columns = {"wafer_id", "lot_id", "failure_type"}
+    missing = sorted(required_columns - set(df.columns))
+    if missing:
+        raise ValueError(f"Raw wafer dataset is missing required columns: {', '.join(missing)}")
+    if "wafer_map" not in df.columns and "wafer_map_path" not in df.columns:
+        raise ValueError("Raw wafer dataset must include either wafer_map or wafer_map_path")
+
+    records: list[dict[str, object]] = []
+    unsupported_labels: set[str] = set()
+    today = date.today().isoformat()
+
+    for _, row in df.iterrows():
+        map_source = row["wafer_map"] if "wafer_map" in df.columns else None
+        if _is_missing_scalar(map_source) and "wafer_map_path" in df.columns:
+            map_source = row["wafer_map_path"]
+        wafer_map = _parse_wafer_map(map_source, base_dir=base_dir)
+        failure_type = _string_or_default(row["failure_type"], "Unknown")
+        if failure_type not in DEFECT_CLASSES:
+            unsupported_labels.add(failure_type)
+
+        die_size = row["die_size"] if "die_size" in df.columns else None
+        if die_size is None or pd.isna(die_size):
+            die_size = int((wafer_map > 0).sum())
+
+        inspection_date = row["inspection_date"] if "inspection_date" in df.columns else None
+        records.append(
+            {
+                "wafer_id": _string_or_default(row["wafer_id"], ""),
+                "lot_id": _string_or_default(row["lot_id"], ""),
+                "wafer_map": wafer_map,
+                "failure_type": failure_type,
+                "die_size": int(die_size),
+                "inspection_date": _string_or_default(inspection_date, today),
+            }
+        )
+
+    if unsupported_labels:
+        labels = ", ".join(sorted(unsupported_labels))
+        supported = ", ".join(DEFECT_CLASSES)
+        raise ValueError(f"Unsupported failure_type values: {labels}. Supported labels: {supported}")
+    return pd.DataFrame(records)
+
+
+def read_raw_dataset(raw_path: Path) -> pd.DataFrame:
+    suffix = raw_path.suffix.lower()
+    if suffix in {".pkl", ".pickle"}:
+        df = pd.read_pickle(raw_path)
+    elif suffix == ".csv":
+        df = pd.read_csv(raw_path)
+    elif suffix == ".jsonl":
+        df = pd.read_json(raw_path, lines=True)
+    elif suffix == ".json":
+        df = pd.read_json(raw_path)
+    else:
+        raise ValueError(f"Unsupported raw dataset format: {raw_path.suffix}")
+    return normalize_raw_dataset(df, base_dir=raw_path.parent)
+
+
 def load_or_create_raw_dataset(
     raw_path: Path = RAW_DATA_PATH,
     samples_per_class: int = 40,
     force: bool = False,
 ) -> pd.DataFrame:
     ensure_directories()
+    raw_path = raw_path if raw_path.is_absolute() else ROOT_DIR / raw_path
     if raw_path.exists() and not force:
-        return pd.read_pickle(raw_path)
+        return read_raw_dataset(raw_path)
+
+    if force and raw_path.suffix.lower() not in {".pkl", ".pickle"}:
+        raise ValueError("Synthetic dataset generation can only write .pkl or .pickle files")
+    if RAW_DATA_PATH_FROM_ENV and not raw_path.exists():
+        raise FileNotFoundError(f"WAFER_RAW_DATA_PATH does not exist: {raw_path}")
+    if not ENABLE_SYNTHETIC_DATA:
+        raise FileNotFoundError(f"No raw wafer dataset found at {raw_path} and synthetic data is disabled")
 
     df = generate_synthetic_dataset(samples_per_class=samples_per_class)
     raw_path.parent.mkdir(parents=True, exist_ok=True)

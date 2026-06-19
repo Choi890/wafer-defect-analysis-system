@@ -6,12 +6,23 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from src.config import DOCS_DIR, EXCEL_REPORT_PATH, PDF_REPORT_PATH, ensure_directories
+from src.config import (
+    CLASSIFICATION_REPORT_PATH,
+    DOCS_DIR,
+    EXCEL_REPORT_PATH,
+    PDF_REPORT_PATH,
+    TRAINING_HISTORY_PATH,
+    ensure_directories,
+)
 from src.database import repository
 
 
 def _safe_frame(rows: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
+def _read_csv_if_exists(path: Path) -> pd.DataFrame:
+    return pd.read_csv(path) if path.exists() else pd.DataFrame()
 
 
 def generate_reports(
@@ -25,6 +36,8 @@ def generate_reports(
     lot_stats = _safe_frame(repository.get_lot_statistics())
     defect_stats = _safe_frame(repository.get_defect_statistics())
     metrics = repository.get_latest_metrics() or {}
+    class_report = _read_csv_if_exists(CLASSIFICATION_REPORT_PATH)
+    training_history = _read_csv_if_exists(TRAINING_HISTORY_PATH)
 
     with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
         wafer_df.to_excel(writer, sheet_name="wafer_info", index=False)
@@ -32,6 +45,8 @@ def generate_reports(
         lot_stats.to_excel(writer, sheet_name="lot_statistics", index=False)
         defect_stats.to_excel(writer, sheet_name="defect_statistics", index=False)
         pd.DataFrame([metrics]).to_excel(writer, sheet_name="model_metric", index=False)
+        class_report.to_excel(writer, sheet_name="class_report", index=False)
+        training_history.to_excel(writer, sheet_name="training_history", index=False)
 
     with PdfPages(pdf_path) as pdf:
         fig, ax = plt.subplots(figsize=(10, 5))
@@ -70,6 +85,33 @@ def generate_reports(
         fig.tight_layout()
         pdf.savefig(fig)
         plt.close(fig)
+
+        if not training_history.empty:
+            fig, ax = plt.subplots(figsize=(10, 5))
+            ax.plot(training_history["epoch"], training_history["train_loss"], marker="o", label="Train loss")
+            ax.plot(training_history["epoch"], training_history["validation_loss"], marker="o", label="Validation loss")
+            ax2 = ax.twinx()
+            ax2.plot(training_history["epoch"], training_history["validation_f1"], color="#dc2626", marker="s", label="Validation F1")
+            ax.set_title("Training History")
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Loss")
+            ax2.set_ylabel("Validation F1")
+            ax.legend(loc="upper left")
+            ax2.legend(loc="upper right")
+            fig.tight_layout()
+            pdf.savefig(fig)
+            plt.close(fig)
+
+        if not class_report.empty:
+            fig, ax = plt.subplots(figsize=(10, 5))
+            class_report.sort_values("f1_score").plot(kind="barh", x="label", y="f1_score", ax=ax, color="#7c3aed")
+            ax.set_xlim(0, 1)
+            ax.set_title("Per-Class F1 Score")
+            ax.set_xlabel("F1 Score")
+            ax.set_ylabel("Defect Class")
+            fig.tight_layout()
+            pdf.savefig(fig)
+            plt.close(fig)
 
     return {"excel_report": str(excel_path), "pdf_report": str(pdf_path)}
 

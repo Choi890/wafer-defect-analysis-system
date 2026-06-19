@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -14,6 +16,26 @@ class PredictResponse(BaseModel):
     predicted_label: str
     confidence: float
     model_name: str
+
+
+class BatchPredictRequest(BaseModel):
+    items: list[PredictRequest] = Field(min_length=1, max_length=500)
+
+
+class BatchPredictResponse(BaseModel):
+    job_id: str
+    status: Literal["queued", "running", "completed", "failed"]
+    requested_count: int
+
+
+class BatchJobResponse(BaseModel):
+    job_id: str
+    status: str
+    requested_count: int
+    completed_count: int
+    error_message: str | None = None
+    created_at: str
+    updated_at: str
 
 
 class HealthResponse(BaseModel):

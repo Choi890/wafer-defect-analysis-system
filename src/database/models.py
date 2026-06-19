@@ -28,4 +28,8 @@ class ModelMetric:
     precision_score: float
     recall_score: float
     f1_score: float
+    macro_f1_score: float
+    best_validation_f1: float
+    best_epoch: int
+    device: str
     trained_at: str

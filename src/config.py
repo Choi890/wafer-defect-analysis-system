@@ -14,15 +14,28 @@ REPORT_DIR = ROOT_DIR / "reports"
 MODEL_DIR = ROOT_DIR / "saved_models"
 DOCS_DIR = ROOT_DIR / "docs"
 
-RAW_DATA_PATH = RAW_DATA_DIR / "wafer_map_dataset.pkl"
+
+def _path_from_env(env_name: str, default: Path) -> Path:
+    value = os.getenv(env_name)
+    path = Path(value) if value else default
+    return path if path.is_absolute() else ROOT_DIR / path
+
+
+RAW_DATA_PATH_FROM_ENV = "WAFER_RAW_DATA_PATH" in os.environ
+RAW_DATA_PATH = _path_from_env("WAFER_RAW_DATA_PATH", RAW_DATA_DIR / "wafer_map_dataset.pkl")
 TRAIN_CSV_PATH = PROCESSED_DATA_DIR / "train.csv"
+ACTIVE_TRAIN_CSV_PATH = PROCESSED_DATA_DIR / "train_active.csv"
+VALIDATION_CSV_PATH = PROCESSED_DATA_DIR / "validation.csv"
 TEST_CSV_PATH = PROCESSED_DATA_DIR / "test.csv"
 LABEL_MAP_PATH = PROCESSED_DATA_DIR / "label_map.json"
 SAMPLE_WAFER_PATH = SAMPLE_DATA_DIR / "sample_wafer.npy"
-MODEL_PATH = Path(os.getenv("WAFER_MODEL_PATH", str(MODEL_DIR / "wafer_cnn_model.pt")))
-DATABASE_PATH = Path(os.getenv("WAFER_DATABASE_PATH", str(DATA_DIR / "wafer_quality.db")))
+MODEL_PATH = _path_from_env("WAFER_MODEL_PATH", MODEL_DIR / "wafer_cnn_model.pt")
+MODEL_REGISTRY_PATH = _path_from_env("WAFER_MODEL_REGISTRY_PATH", MODEL_DIR / "model_registry.json")
+DATABASE_PATH = _path_from_env("WAFER_DATABASE_PATH", DATA_DIR / "wafer_quality.db")
 METRICS_JSON_PATH = REPORT_DIR / "model_metrics.json"
 CONFUSION_MATRIX_PATH = REPORT_DIR / "confusion_matrix.csv"
+CLASSIFICATION_REPORT_PATH = REPORT_DIR / "classification_report.csv"
+TRAINING_HISTORY_PATH = REPORT_DIR / "training_history.csv"
 EXCEL_REPORT_PATH = REPORT_DIR / "defect_analysis_report.xlsx"
 PDF_REPORT_PATH = REPORT_DIR / "model_performance_report.pdf"
 
@@ -35,6 +48,8 @@ MODEL_NAME = "CNN_v1"
 WARNING_DEFECT_RATE = float(os.getenv("WARNING_DEFECT_RATE", "0.70"))
 CRITICAL_DEFECT_RATE = float(os.getenv("CRITICAL_DEFECT_RATE", "0.85"))
 LOW_CONFIDENCE_THRESHOLD = float(os.getenv("LOW_CONFIDENCE_THRESHOLD", "0.70"))
+ENABLE_SYNTHETIC_DATA = os.getenv("WAFER_ENABLE_SYNTHETIC_DATA", "true").lower() not in {"0", "false", "no"}
+API_KEY = os.getenv("WAFER_API_KEY", "")
 
 DEFECT_CLASSES = [
     "Normal",
