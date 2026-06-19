@@ -2,6 +2,12 @@
 
 Base URL: `http://localhost:8000`
 
+If `WAFER_API_KEY` is set, include it on every request:
+
+```text
+x-api-key: <your-api-key>
+```
+
 ## `GET /health`
 
 Returns service status and whether the local database file exists.
@@ -51,6 +57,37 @@ Response:
 }
 ```
 
+## `POST /predict/batch`
+
+Queues a batch prediction job. This uses an in-process background worker for local/PoC deployments and persists job status in SQLite.
+
+```json
+{
+  "items": [
+    {"wafer_id": "WAFER_000001"},
+    {"wafer_id": "API_BATCH_001", "lot_id": "LOT_API", "wafer_map": [[0, 1], [1, 2]]}
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "job_id": "JOB_ABC123DEF456",
+  "status": "queued",
+  "requested_count": 2
+}
+```
+
+## `GET /jobs`
+
+Returns recent batch prediction jobs.
+
+## `GET /jobs/{job_id}`
+
+Returns one batch prediction job status.
+
 ## `GET /results`
 
 Query parameters:
@@ -66,6 +103,22 @@ Returns the latest prediction for one wafer.
 ## `GET /metrics`
 
 Returns latest metric and metric history.
+
+The latest metric includes aggregate scores plus training metadata when the enhanced pipeline has run:
+
+```json
+{
+  "model_name": "CNN_v1",
+  "accuracy": 0.9028,
+  "precision_score": 0.9031,
+  "recall_score": 0.9028,
+  "f1_score": 0.8908,
+  "macro_f1_score": 0.8908,
+  "best_validation_f1": 0.8775,
+  "best_epoch": 6,
+  "device": "cuda"
+}
+```
 
 ## `GET /summary`
 
@@ -93,3 +146,15 @@ Returns total wafer count, defect count, and defect rate per lot.
 ## `GET /statistics/defect`
 
 Returns defect count and defect rate per lot and defect type.
+
+## `GET /models`
+
+Returns the local model registry from `saved_models/model_registry.json`.
+
+## `GET /monitoring`
+
+Returns an operations snapshot including service readiness, quality summary, latest metric, recent batch jobs, and model registry count.
+
+## `GET /monitoring/prometheus`
+
+Returns a Prometheus-compatible text payload for core gauges such as wafer count, defect rate, risk lots, low-confidence predictions, and latest F1.

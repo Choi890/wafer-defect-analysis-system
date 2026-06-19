@@ -7,6 +7,8 @@ import plotly.graph_objects as go
 from matplotlib import pyplot as plt
 from matplotlib.colors import ListedColormap
 
+from src.utils.labels import defect_label
+
 
 WAFER_CMAP = ListedColormap(["#111827", "#d1d5db", "#ef4444"])
 QUALITY_PALETTE = {
@@ -20,17 +22,20 @@ QUALITY_PALETTE = {
     "Random": "#64748b",
     "Scratch": "#ca8a04",
 }
+QUALITY_LABEL_PALETTE = {defect_label(key): value for key, value in QUALITY_PALETTE.items()}
 RISK_COLORS = {"Normal": "#16a34a", "Warning": "#f59e0b", "Critical": "#dc2626"}
+RISK_LABELS = {"Normal": "정상", "Warning": "주의", "Critical": "심각"}
+RISK_COLORS_KO = {"정상": "#16a34a", "주의": "#f59e0b", "심각": "#dc2626"}
 
 
 def apply_plot_theme(fig, height: int = 360):
     fig.update_layout(
         height=height,
         template="plotly_white",
-        margin=dict(l=16, r=16, t=52, b=24),
+        margin=dict(l=20, r=20, t=64, b=78),
         font=dict(family="Inter, Segoe UI, Arial", size=12, color="#111827"),
         title=dict(font=dict(size=16, color="#111827")),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
     )
@@ -52,29 +57,34 @@ def wafer_map_figure(wafer_map: np.ndarray, title: str | None = None):
 
 def defect_bar_chart(df: pd.DataFrame):
     counts = df["failure_type"].value_counts().rename_axis("failure_type").reset_index(name="count")
+    counts["failure_label"] = counts["failure_type"].map(defect_label)
     fig = px.bar(
         counts,
-        x="failure_type",
+        x="failure_label",
         y="count",
-        color="failure_type",
-        color_discrete_map=QUALITY_PALETTE,
+        color="failure_label",
+        color_discrete_map=QUALITY_LABEL_PALETTE,
         title="불량 유형별 발생 수",
+        labels={"failure_label": "불량 유형", "count": "발생 수"},
     )
-    fig.update_traces(marker_line_width=0, hovertemplate="%{x}<br>count=%{y}<extra></extra>")
+    fig.update_layout(showlegend=False)
+    fig.update_traces(marker_line_width=0, hovertemplate="%{x}<br>발생 수=%{y}<extra></extra>")
     return apply_plot_theme(fig)
 
 
 def defect_pie_chart(df: pd.DataFrame):
     counts = df["failure_type"].value_counts().rename_axis("failure_type").reset_index(name="count")
+    counts["failure_label"] = counts["failure_type"].map(defect_label)
     fig = px.pie(
         counts,
-        names="failure_type",
+        names="failure_label",
         values="count",
         title="불량 유형 비중",
-        color="failure_type",
-        color_discrete_map=QUALITY_PALETTE,
+        color="failure_label",
+        color_discrete_map=QUALITY_LABEL_PALETTE,
         hole=0.58,
     )
+    fig.update_layout(showlegend=False)
     fig.update_traces(textposition="inside", textinfo="percent+label", hovertemplate="%{label}<br>%{value}건<extra></extra>")
     return apply_plot_theme(fig)
 
@@ -88,21 +98,23 @@ def lot_defect_rate_chart(df: pd.DataFrame):
     )
     lot_stats["defect_rate"] = lot_stats["defect_rate"] * 100
     fig = px.line(lot_stats, x="lot_id", y="defect_rate", markers=True, title="Lot별 불량률 추이")
+    fig.update_layout(xaxis_title="Lot", yaxis_title="불량률")
     fig.update_traces(line=dict(color="#2563eb", width=3), marker=dict(size=7), hovertemplate="%{x}<br>%{y:.1f}%<extra></extra>")
     fig.update_yaxes(ticksuffix="%", range=[0, 105])
     return apply_plot_theme(fig)
 
 
 def confusion_matrix_figure(matrix: np.ndarray, labels: list[str]):
+    display_labels = [defect_label(label) for label in labels]
     fig = px.imshow(
         matrix,
-        x=labels,
-        y=labels,
+        x=display_labels,
+        y=display_labels,
         color_continuous_scale=["#eff6ff", "#2563eb", "#111827"],
         text_auto=True,
-        title="Confusion Matrix",
+        title="예측 혼동 행렬",
     )
-    fig.update_layout(xaxis_title="Predicted", yaxis_title="Actual")
+    fig.update_layout(xaxis_title="예측", yaxis_title="실제")
     return apply_plot_theme(fig, height=520)
 
 
@@ -138,10 +150,69 @@ def confidence_distribution_chart(result_df: pd.DataFrame):
         nbins=20,
         color_discrete_sequence=["#0891b2"],
         title="예측 신뢰도 분포",
+        labels={"confidence": "신뢰도", "count": "예측 수"},
     )
-    fig.update_traces(marker_line_width=0, hovertemplate="confidence=%{x:.3f}<br>count=%{y}<extra></extra>")
+    fig.update_traces(marker_line_width=0, hovertemplate="신뢰도=%{x:.3f}<br>예측 수=%{y}<extra></extra>")
     fig.update_xaxes(range=[0, 1])
+    fig.update_yaxes(title="예측 수")
     return apply_plot_theme(fig, height=320)
+
+
+def training_history_chart(history_df: pd.DataFrame):
+    if history_df.empty:
+        return apply_plot_theme(go.Figure(), height=320)
+    fig = go.Figure()
+    fig.add_scatter(
+        x=history_df["epoch"],
+        y=history_df["train_loss"],
+        mode="lines+markers",
+        name="학습 Loss",
+        line=dict(color="#2563eb", width=3),
+    )
+    fig.add_scatter(
+        x=history_df["epoch"],
+        y=history_df["validation_loss"],
+        mode="lines+markers",
+        name="검증 Loss",
+        line=dict(color="#f59e0b", width=3),
+    )
+    fig.add_scatter(
+        x=history_df["epoch"],
+        y=history_df["validation_f1"],
+        mode="lines+markers",
+        name="검증 F1",
+        yaxis="y2",
+        line=dict(color="#16a34a", width=3),
+    )
+    fig.update_layout(
+        title="학습 이력",
+        yaxis=dict(title="Loss"),
+        yaxis2=dict(title="검증 F1", overlaying="y", side="right", range=[0, 1]),
+    )
+    return apply_plot_theme(fig, height=360)
+
+
+def class_performance_chart(class_report_df: pd.DataFrame):
+    if class_report_df.empty:
+        return apply_plot_theme(go.Figure(), height=320)
+    frame = class_report_df.sort_values("f1_score", ascending=True).copy()
+    frame["label_display"] = frame["label"].map(defect_label)
+    fig = px.bar(
+        frame,
+        x="f1_score",
+        y="label_display",
+        orientation="h",
+        color="recall",
+        color_continuous_scale=["#fee2e2", "#f59e0b", "#16a34a"],
+        range_x=[0, 1],
+        title="불량 유형별 모델 성능",
+        labels={"label_display": "불량 유형", "f1_score": "F1"},
+        hover_data={"label": False, "precision": ":.3f", "recall": ":.3f", "f1_score": ":.3f", "support": True},
+    )
+    fig.update_traces(marker_line_width=0)
+    fig.update_xaxes(title="F1")
+    fig.update_yaxes(title="불량 유형")
+    return apply_plot_theme(fig, height=380)
 
 
 def lot_risk_chart(lot_quality_df: pd.DataFrame):
@@ -149,15 +220,18 @@ def lot_risk_chart(lot_quality_df: pd.DataFrame):
         return apply_plot_theme(go.Figure(), height=320)
     frame = lot_quality_df.sort_values("defect_rate", ascending=False).head(15).copy()
     frame["defect_rate_pct"] = frame["defect_rate"] * 100
+    frame["risk_label"] = frame["risk_level"].map(RISK_LABELS).fillna(frame["risk_level"])
+    frame["dominant_defect_label"] = frame["dominant_defect"].map(defect_label)
     fig = px.bar(
         frame,
         x="defect_rate_pct",
         y="lot_id",
         orientation="h",
-        color="risk_level",
-        color_discrete_map=RISK_COLORS,
+        color="risk_label",
+        color_discrete_map=RISK_COLORS_KO,
         title="Lot 위험도 Top 15",
-        hover_data={"dominant_defect": True, "avg_confidence": ":.3f", "defect_rate_pct": ":.1f"},
+        labels={"defect_rate_pct": "불량률", "lot_id": "Lot", "risk_label": "위험도"},
+        hover_data={"dominant_defect": False, "dominant_defect_label": True, "avg_confidence": ":.3f", "defect_rate_pct": ":.1f"},
     )
     fig.update_layout(yaxis=dict(categoryorder="total ascending"))
     fig.update_xaxes(ticksuffix="%", range=[0, 105])
@@ -170,26 +244,28 @@ def defect_pareto_chart(df: pd.DataFrame):
     counts.columns = ["failure_type", "count"]
     if counts.empty:
         return apply_plot_theme(go.Figure(), height=340)
+    counts["failure_label"] = counts["failure_type"].map(defect_label)
     counts["cumulative_rate"] = counts["count"].cumsum() / counts["count"].sum() * 100
     fig = go.Figure()
     fig.add_bar(
-        x=counts["failure_type"],
+        x=counts["failure_label"],
         y=counts["count"],
         marker_color=[QUALITY_PALETTE.get(label, "#64748b") for label in counts["failure_type"]],
-        name="Count",
+        name="건수",
     )
     fig.add_scatter(
-        x=counts["failure_type"],
+        x=counts["failure_label"],
         y=counts["cumulative_rate"],
         mode="lines+markers",
         yaxis="y2",
         line=dict(color="#111827", width=3),
         marker=dict(size=7),
-        name="Cumulative",
+        name="누적 비율",
     )
     fig.update_layout(
         title="불량 Pareto",
-        yaxis=dict(title="Count"),
-        yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 105], ticksuffix="%"),
+        xaxis=dict(title="불량 유형"),
+        yaxis=dict(title="발생 수"),
+        yaxis2=dict(title="누적 비율", overlaying="y", side="right", range=[0, 105], ticksuffix="%"),
     )
     return apply_plot_theme(fig, height=360)

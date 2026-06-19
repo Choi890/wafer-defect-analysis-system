@@ -8,7 +8,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from src.config import CONFUSION_MATRIX_PATH, LABEL_MAP_PATH, MODEL_PATH, TEST_CSV_PATH
+from src.config import CLASSIFICATION_REPORT_PATH, CONFUSION_MATRIX_PATH, LABEL_MAP_PATH, MODEL_PATH, TEST_CSV_PATH
 from src.data.dataset import WaferMapDataset
 from src.models.cnn_model import WaferCNN
 from src.utils.metrics import classification_metrics
@@ -37,9 +37,10 @@ def evaluate_model(
             y_true.extend(targets.numpy().tolist())
             y_pred.extend(predictions.numpy().tolist())
 
-    metrics = classification_metrics(y_true, y_pred, labels=list(range(len(labels))))
+    metrics = classification_metrics(y_true, y_pred, labels=list(range(len(labels))), label_names=labels)
     matrix = np.asarray(metrics["confusion_matrix"])
     pd.DataFrame(matrix, index=labels, columns=labels).to_csv(CONFUSION_MATRIX_PATH)
+    pd.DataFrame(metrics.get("per_class", [])).to_csv(CLASSIFICATION_REPORT_PATH, index=False)
     return metrics
 
 

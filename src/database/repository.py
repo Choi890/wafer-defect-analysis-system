@@ -69,12 +69,24 @@ def insert_prediction(
 
 
 def insert_model_metric(model_name: str, metrics: dict[str, Any], trained_at: str | None = None) -> None:
+    init_db()
     with get_connection() as conn:
         conn.execute(
             """
             INSERT INTO model_metric
-                (model_name, accuracy, precision_score, recall_score, f1_score, trained_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (
+                    model_name,
+                    accuracy,
+                    precision_score,
+                    recall_score,
+                    f1_score,
+                    macro_f1_score,
+                    best_validation_f1,
+                    best_epoch,
+                    device,
+                    trained_at
+                )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 model_name,
@@ -82,9 +94,85 @@ def insert_model_metric(model_name: str, metrics: dict[str, Any], trained_at: st
                 float(metrics["precision_score"]),
                 float(metrics["recall_score"]),
                 float(metrics["f1_score"]),
+                float(metrics.get("macro_f1_score", 0.0)),
+                float(metrics.get("best_validation_f1", 0.0)),
+                int(metrics.get("best_epoch", 0)),
+                str(metrics.get("device", "cpu")),
                 trained_at or utc_now(),
             ),
         )
+
+
+def create_batch_job(job_id: str, requested_count: int) -> None:
+    init_db()
+    now = utc_now()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO batch_prediction_job
+                (job_id, status, requested_count, completed_count, error_message, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (job_id, "queued", int(requested_count), 0, None, now, now),
+        )
+
+
+def update_batch_job(
+    job_id: str,
+    status: str | None = None,
+    completed_count: int | None = None,
+    error_message: str | None = None,
+) -> None:
+    assignments: list[str] = []
+    params: list[Any] = []
+    if status is not None:
+        assignments.append("status = ?")
+        params.append(status)
+    if completed_count is not None:
+        assignments.append("completed_count = ?")
+        params.append(int(completed_count))
+    if error_message is not None:
+        assignments.append("error_message = ?")
+        params.append(error_message)
+    assignments.append("updated_at = ?")
+    params.append(utc_now())
+    params.append(job_id)
+
+    with get_connection() as conn:
+        conn.execute(
+            f"""
+            UPDATE batch_prediction_job
+            SET {", ".join(assignments)}
+            WHERE job_id = ?
+            """,
+            tuple(params),
+        )
+
+
+def get_batch_job(job_id: str) -> dict[str, Any] | None:
+    init_db()
+    rows = _rows(
+        """
+        SELECT job_id, status, requested_count, completed_count, error_message, created_at, updated_at
+        FROM batch_prediction_job
+        WHERE job_id = ?
+        """,
+        (job_id,),
+    )
+    return rows[0] if rows else None
+
+
+def list_batch_jobs(limit: int = 50) -> list[dict[str, Any]]:
+    init_db()
+    limit = max(1, min(int(limit), 200))
+    return _rows(
+        f"""
+        SELECT job_id, status, requested_count, completed_count, error_message, created_at, updated_at
+        FROM batch_prediction_job
+        ORDER BY created_at DESC
+        LIMIT {limit}
+        """
+    )
 
 
 def refresh_defect_statistics(df: pd.DataFrame) -> None:
@@ -172,9 +260,20 @@ def get_result_by_wafer_id(wafer_id: str) -> dict[str, Any] | None:
 
 
 def get_latest_metrics() -> dict[str, Any] | None:
+    init_db()
     rows = _rows(
         """
-        SELECT model_name, accuracy, precision_score, recall_score, f1_score, trained_at
+        SELECT
+            model_name,
+            accuracy,
+            precision_score,
+            recall_score,
+            f1_score,
+            macro_f1_score,
+            best_validation_f1,
+            best_epoch,
+            device,
+            trained_at
         FROM model_metric
         ORDER BY id DESC
         LIMIT 1
@@ -184,10 +283,21 @@ def get_latest_metrics() -> dict[str, Any] | None:
 
 
 def get_metrics_history(limit: int = 20) -> list[dict[str, Any]]:
+    init_db()
     limit = max(1, min(int(limit), 100))
     return _rows(
         f"""
-        SELECT model_name, accuracy, precision_score, recall_score, f1_score, trained_at
+        SELECT
+            model_name,
+            accuracy,
+            precision_score,
+            recall_score,
+            f1_score,
+            macro_f1_score,
+            best_validation_f1,
+            best_epoch,
+            device,
+            trained_at
         FROM model_metric
         ORDER BY id DESC
         LIMIT {limit}

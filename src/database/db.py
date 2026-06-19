@@ -32,6 +32,10 @@ CREATE TABLE IF NOT EXISTS model_metric (
     precision_score REAL,
     recall_score REAL,
     f1_score REAL,
+    macro_f1_score REAL,
+    best_validation_f1 REAL,
+    best_epoch INTEGER,
+    device TEXT,
     trained_at TEXT
 );
 
@@ -44,10 +48,34 @@ CREATE TABLE IF NOT EXISTS defect_statistics (
     calculated_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS batch_prediction_job (
+    job_id TEXT PRIMARY KEY,
+    status TEXT,
+    requested_count INTEGER,
+    completed_count INTEGER,
+    error_message TEXT,
+    created_at TEXT,
+    updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS schema_migration (
+    version INTEGER PRIMARY KEY,
+    name TEXT,
+    applied_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_prediction_wafer_id ON prediction_result(wafer_id);
 CREATE INDEX IF NOT EXISTS idx_wafer_lot_id ON wafer_info(lot_id);
 CREATE INDEX IF NOT EXISTS idx_defect_statistics_lot ON defect_statistics(lot_id);
+CREATE INDEX IF NOT EXISTS idx_batch_prediction_job_status ON batch_prediction_job(status);
 """
+
+MODEL_METRIC_COLUMNS = {
+    "macro_f1_score": "REAL",
+    "best_validation_f1": "REAL",
+    "best_epoch": "INTEGER",
+    "device": "TEXT",
+}
 
 
 def get_connection(db_path: Path = DATABASE_PATH) -> sqlite3.Connection:
@@ -61,3 +89,7 @@ def get_connection(db_path: Path = DATABASE_PATH) -> sqlite3.Connection:
 def init_db(db_path: Path = DATABASE_PATH) -> None:
     with get_connection(db_path) as conn:
         conn.executescript(SCHEMA_SQL)
+        existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(model_metric)").fetchall()}
+        for column_name, column_type in MODEL_METRIC_COLUMNS.items():
+            if column_name not in existing_columns:
+                conn.execute(f"ALTER TABLE model_metric ADD COLUMN {column_name} {column_type}")

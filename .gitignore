@@ -17,6 +17,7 @@ reports/*.xlsx
 reports/*.json
 reports/*.csv
 saved_models/*.pt
+saved_models/*.json
 logs/
 
 # IDE and OS files

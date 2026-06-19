@@ -23,10 +23,11 @@
 | Dashboard | Control Tower, Lot Analytics, Wafer Review, Model Ops, Reports 탭 구성 |
 | 운영 KPI | 전체 wafer 수, Lot 수, 불량률, 위험 Lot, 평균 신뢰도, 모델 F1 표시 |
 | 품질 리스크 | Warning/Critical 불량률 기준으로 Lot 위험도 분류 |
-| 모델 운영 | 예측 신뢰도 분포, 낮은 신뢰도 예측, audit log 제공 |
-| API 운영성 | `/health`, `/summary`, 요청 ID, 처리 시간 헤더, CORS 추가 |
-| 설정 | `.env.example` 기반 환경 변수 설정 지원 |
-| 문서 | API spec, architecture, operations guide, troubleshooting 제공 |
+| 모델 운영 | validation 기반 best checkpoint, class-weight 학습, 학습 이력, class별 F1/Recall 제공 |
+| API 운영성 | `/health`, `/summary`, `/monitoring`, 요청 ID, 처리 시간 헤더, CORS, 선택적 API key 추가 |
+| 설정 | `.env.example` 기반 환경 변수, 외부 raw dataset 경로 설정 지원 |
+| 배치/모델 운영 | 배치 예측 job 상태 추적, 로컬 model registry 기록 |
+| 문서 | API spec, architecture, operations guide, troubleshooting, wafer project comparison 제공 |
 
 ## 프로젝트 구조
 
@@ -101,9 +102,15 @@ docker compose up --build
 | GET | `/health` | 앱, DB, 모델 상태 확인 |
 | GET | `/summary` | 품질 KPI 요약 |
 | POST | `/predict` | wafer_id 또는 wafer_map 기반 예측 |
+| POST | `/predict/batch` | 배치 예측 job 생성 |
+| GET | `/jobs` | 배치 예측 job 목록 |
+| GET | `/jobs/{job_id}` | 배치 예측 job 상태 |
 | GET | `/results` | 최신 예측 결과 목록 |
 | GET | `/results/{wafer_id}` | 특정 wafer 예측 결과 |
 | GET | `/metrics` | 모델 성능 지표 |
+| GET | `/models` | 로컬 model registry |
+| GET | `/monitoring` | 운영 상태 스냅샷 |
+| GET | `/monitoring/prometheus` | Prometheus 형식 핵심 지표 |
 | GET | `/statistics/lot` | Lot별 불량률 |
 | GET | `/statistics/defect` | Lot/불량 유형별 통계 |
 
@@ -120,7 +127,11 @@ http://127.0.0.1:8000/docs
 ```text
 APP_ENV=local
 WAFER_DATABASE_PATH=data/wafer_quality.db
+WAFER_RAW_DATA_PATH=data/raw/wafer_map_dataset.pkl
+WAFER_ENABLE_SYNTHETIC_DATA=true
 WAFER_MODEL_PATH=saved_models/wafer_cnn_model.pt
+WAFER_MODEL_REGISTRY_PATH=saved_models/model_registry.json
+WAFER_API_KEY=
 WARNING_DEFECT_RATE=0.70
 CRITICAL_DEFECT_RATE=0.85
 LOW_CONFIDENCE_THRESHOLD=0.70
@@ -128,7 +139,7 @@ LOW_CONFIDENCE_THRESHOLD=0.70
 
 ## 데이터와 모델
 
-실제 wafer 데이터가 없으면 `data/raw/wafer_map_dataset.pkl` synthetic demo 데이터가 자동 생성됩니다. 실제 공개 데이터셋이나 보유 데이터를 사용할 경우 동일한 컬럼 구조로 변환한 뒤 raw dataset을 교체하면 됩니다.
+실제 wafer 데이터가 없으면 `data/raw/wafer_map_dataset.pkl` synthetic demo 데이터가 자동 생성됩니다. 실제 공개 데이터셋이나 보유 데이터를 사용할 경우 `WAFER_RAW_DATA_PATH`로 `.pkl`, `.csv`, `.json`, `.jsonl` 파일을 지정할 수 있습니다.
 
 입력 데이터 컬럼:
 
@@ -137,6 +148,7 @@ LOW_CONFIDENCE_THRESHOLD=0.70
 | `wafer_id` | Wafer 식별자 |
 | `lot_id` | Lot 식별자 |
 | `wafer_map` | 2D wafer map 배열 |
+| `wafer_map_path` | `.npy` wafer map 파일 경로. `wafer_map` 대신 사용 가능 |
 | `failure_type` | 실제 불량 유형 |
 | `die_size` | die 개수 |
 | `inspection_date` | 검사 일자 |
@@ -147,10 +159,11 @@ Synthetic demo 데이터 기준 검증 결과:
 
 | Metric | Value |
 | --- | ---: |
-| Accuracy | 0.875 |
-| Precision | 0.881 |
-| Recall | 0.875 |
-| F1-score | 0.865 |
+| Accuracy | 0.903 |
+| Precision | 0.903 |
+| Recall | 0.903 |
+| F1-score | 0.891 |
+| Best validation F1 | 0.877 |
 
 실행 환경, epoch 수, 실제 데이터셋 교체 여부에 따라 결과는 달라질 수 있습니다.
 
